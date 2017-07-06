@@ -1,0 +1,316 @@
+{
+	"AWSTemplateFormatVersion": "2010-09-09",
+	"Description": "afilitas test",
+	"Metadata": {
+		"Version": "V00",
+		"LastUpdated": "Tue 03st Sept 2017",
+		"UpdatedBy": "Roman Sereda",
+		"Comments": "Config less enviroment"
+	},
+	"Parameters": {
+		"pEeEnvironment": {
+			"Type": "String",
+			"Description": "Environment name",
+			"AllowedValues": [
+				"PreProduction",
+				"Production",
+				"Development",
+				"PenTest"
+			]
+		},
+
+
+		"pEeKeyName": {
+			"Type": "AWS::EC2::KeyPair::KeyName",
+			"Description": "Enter the name of the SSH Key created in the console"
+		},
+		"pGITrepo": {
+			"Type": "String",
+			"Description": "URL to GIT app repositories",
+			"MinLength": "1",
+			"MaxLength": "100",
+			"Default" : "https://github.com/rsereda"
+		},
+		"pGITbranch": {
+			"Type": "String",
+			"Description": "GIT branch name",
+			"MinLength": "1",
+			"MaxLength": "20",
+			"Default" : "master"
+		}
+	},
+		"Resources": {
+		"iUDeployUser": {
+			"Type": "AWS::IAM::User",
+			"Properties": {
+				"Path": "/",
+				"Policies": [{
+					"PolicyName": "AWSEC2readonlyaccessfordeploy",
+					"PolicyDocument": {
+						"Version": "2012-10-17",
+						"Statement": [{
+							"Effect": "Allow",
+							"Action": "ec2: Describe*",
+							"Resource": "*"
+						}, {
+							"Effect": "Allow",
+							"Action": "elasticloadbalancing: Describe*",
+							"Resource": "*"
+						}, {
+							"Effect": "Allow",
+							"Action": [
+								"cloudwatch: ListMetrics",
+								"cloudwatch: GetMetricStatistics",
+								"cloudwatch: Describe*"
+							],
+							"Resource": "*"
+						}, {
+							"Effect": "Allow",
+							"Action": "autoscaling: Describe*",
+							"Resource": "*"
+						}, {
+							"Effect": "Allow",
+							"Action": [
+								"tag: getResources",
+								"tag: getTagKeys",
+								"tag: getTagValues"
+							],
+							"Resource": "*"
+						}, {
+							"Effect": "Allow",
+							"Action": "s3:*",
+							"Resource": "*"
+						}, {
+							"Action": [
+								"sqs:*"
+							],
+							"Effect": "Allow",
+							"Resource": "*"
+						}]
+					}
+				}]
+			}
+		},
+	    "IAAcessKeyDeployUser": {
+			"Type": "AWS::IAM::AccessKey",
+			"Properties": {
+				"UserName": {
+					"Ref": "iUDeployUser"
+				}
+			}
+		},
+"sgEnvironment": {
+            "Type": "AWS::EC2::SecurityGroup",
+            "Properties": {
+                "GroupDescription": "Security Group common to entire environment",
+                "Tags" : [
+                        { "Key" : "Name", "Value" : "Common Environment SG" },
+                        { "Key" : "Environment", "Value" : { "Ref" : "pEeEnvironment" } }
+                ],
+                "VpcId": "vpc-61751d04"
+            }
+        },
+"irElbWebHttpAll": {
+            "Type": "AWS::EC2::SecurityGroupIngress",
+            "Properties": {
+                "GroupId": {
+                    "Ref": "sgEnvironment"
+                },
+                "IpProtocol": "tcp",
+                "CidrIp": "0.0.0.0/0",
+                "FromPort": "80",
+                "ToPort": "80"
+            }
+        },
+"irElbWebSSHAll": {
+            "Type": "AWS::EC2::SecurityGroupIngress",
+            "Properties": {
+                "GroupId": {
+                    "Ref": "sgEnvironment"
+                },
+                "IpProtocol": "tcp",
+                "CidrIp": "0.0.0.0/0",
+                "FromPort": "22",
+                "ToPort": "22"
+            }
+        },
+"elbPublicWebApp": {
+			"Type": "AWS::ElasticLoadBalancing::LoadBalancer",
+			"Properties": {
+				"LoadBalancerName": {
+					"Fn::Join": ["-", ["elb-public", {
+						"Ref": "pEeEnvironment"
+					}, "Web"]]
+				},
+				"Listeners": [{
+					"InstancePort": "80",
+					"InstanceProtocol": "HTTP",
+					"LoadBalancerPort": "80",
+					"Protocol": "HTTP"
+				} 
+				],
+				"SecurityGroups": [{
+					"Ref": "sgEnvironment"
+				}],
+				"Subnets": ["subnet-19b56632","subnet-19b56632"],
+
+				"Tags": [{
+					"Key": "Name",
+					"Value": {
+						"Fn::Join": ["-", [{
+							"Ref": "pEeEnvironment"
+						}, "web"]]
+					}
+				}, {
+					"Key": "Environment",
+					"Value": {
+						"Ref": "pEeEnvironment"
+					}
+				}]
+			}
+		}
+    },
+
+    		"asgWeFix": {
+			"Type": "AWS::AutoScaling::AutoScalingGroup",
+			"Properties": {
+
+				"LaunchConfigurationName": {
+					"Ref": "lcfgWeFix"
+				},
+				"LoadBalancerNames":[ {"Ref":"elbPublicWebApp"} ],
+				"MinSize": "2",
+				"MaxSize": "2",
+				"HealthCheckGracePeriod": "360",
+				"VPCZoneIdentifier": ["subnet-19b56632","subnet-19b56632"],
+				"Tags": [
+					{
+						"Key": "Name",
+						"Value": {
+							"Fn::Join": [
+								"",
+								[
+									"APP Servers Cluster Group"
+								]
+							]
+						},
+						"PropagateAtLaunch": "true"
+					},
+					{
+						"Key": "Environment",
+						"Value": {
+							"Ref": "pEnvironment"
+						},
+						"PropagateAtLaunch": "true"
+					}
+				]
+			}
+		},
+		"lcfgWeFix": {
+			"Type": "AWS::AutoScaling::LaunchConfiguration",
+			"Metadata": {
+				"Comment": "Install WeFix node APP scripts  ",
+				"AWS::CloudFormation::Init": {
+					"configSets": {
+						"installScripts": [
+							"upload"
+							
+						]
+					},
+					"upload": {
+						"files":{
+							
+
+								"/opt/app/app.conf": {
+								"content":{
+									"Fn::Join": [ "", [
+									
+											"[program:app]","\n",
+											"command=flask run --host=0.0.0.0","\n",
+											"process_name=%(process_num)s","\n",
+											"numprocs=1","\n",
+											"directory=/opt/app/app/","\n",
+											"autostart=true","\n",
+											"stopasgroup=true","\n",
+											"stopsignal=KILL","\n",
+											"autorestart=true","\n",
+											"user=root","\n",
+											"stdout_logfile=/var/log/stdout.app.log","\n",
+											"stdout_logfile_maxbytes=100MB","\n",
+											"stderr_logfile=/var/log/err.app.log","\n",
+											"stderr_logfile_maxbytes=100MB","\n",
+											"environment=FLASK_APP=/opt/app/app/hello.py","\n"
+											]]},
+										"mode": "000644"
+										}
+								
+								
+								}
+							}
+				}
+			},
+			"Properties": {
+				"KeyName": {
+					"Ref": "pKeyName"
+				},
+				"ImageId": "ami-d15a75c7",
+				"InstanceType": "t2.micro",
+				"SecurityGroups": [
+					{
+						"Ref": "sgEnvironment"
+					}
+				],
+
+				"UserData": {
+					"Fn::Base64": {
+						"Fn::Join": [
+							"",
+							[
+								"#!/bin/bash -x\n",
+								"curl https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-latest.tar.gz -s -k -o /tmp/cfn-bootstrap.tar.gz\n",
+								"cd /opt\n",
+								"tar xfz /tmp/cfn-bootstrap.tar.gz\n",
+								"cd aws-cfn-bootstrap*\n",
+								"python ./setup.py install\n",
+								"chmod u+x bin/*\n",
+								"aws configure set preview.cloudfront true\n",
+								"/opt/aws-cfn-bootstrap*/bin/cfn-init",
+								" -v",
+								" --stack ",
+								{
+									"Ref": "AWS::StackName"
+								},
+								" --resource lcfgWeFix",
+								" --configsets installScripts",
+								" --region ",
+								{
+									"Ref": "AWS::Region"
+								},
+								"\n",
+								"apt-get update && apt-get -y upgrade\n",
+								
+								"apt-get install -y git python2.7-dev python-setuptools screen supervisor build-essential libkrb5-dev python-pip\n",
+								"pip -y install flask\n",
+								"mv /opt/app/app.conf /etc/supervisor/conf.d/app.conf\n",
+								"git clone ", { "Ref": "pGITrepo" }, " ", "-b", { "Ref": "pGITbranch" }, " /opt/app/ \n",
+								"service supervisor start\n",
+								"supervisorctl reload\n",
+								"service nginx restart\n",
+								"/opt/aws-cfn-bootstrap*/bin/cfn-signal -e $? --stack ",
+								{
+									"Ref": "AWS::StackName"
+								},
+								" --resource asgWeFix --region ",
+								{
+									"Ref": "AWS::Region"
+								},
+								"\n"
+
+							]
+						]
+					}
+				}
+			}
+		}
+	
+}
